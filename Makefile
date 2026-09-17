@@ -1,4 +1,4 @@
-.PHONY: setup install test lint format clean download-data download-attribution-data popularity-baseline cf-experiment ctr-experiment
+.PHONY: setup install test lint format clean download-data download-attribution-data popularity-baseline cf-experiment ctr-experiment pre-serve-ctr-experiment ranking-integration-experiment
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -26,6 +26,12 @@ cf-experiment:
 
 ctr-experiment:
 	python3 scripts/run_ctr_experiment.py
+
+pre-serve-ctr-experiment:
+	python3 scripts/run_pre_serve_ctr_experiment.py
+
+ranking-integration-experiment:
+	python3 scripts/run_ranking_integration_experiment.py
 
 test:
 	pytest -v --cov=src tests/

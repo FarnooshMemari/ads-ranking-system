@@ -202,3 +202,10 @@ reported as exactly what it is, not inflated into a claim the data doesn't back.
 Per instructions — this is a design document only. No new model was trained, no new features were
 built, no experiment was run. `src/retrieval/`, `src/models/ctr_model.py`, and
 `src/features/attribution_features.py` are unchanged by this document.
+
+**Update**: Parts A and B have since been implemented and run against the full dataset. Both
+cohorts' verified-intersection populations cleared the documented minimum sample size (759 cold,
+3,479 warm) — the "too small to be meaningful" contingency did not occur, though coverage itself is
+small (2–5% of retrieved slots). Results: [`pre_serve_ctr_model.md`](pre_serve_ctr_model.md) (Part
+A) and [`ranking_integration_results.md`](ranking_integration_results.md) (Part B and overall
+conclusion).

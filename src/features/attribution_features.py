@@ -65,6 +65,24 @@ FEATURE_COLUMNS = (
 
 CATEGORICAL_FEATURE_COLUMNS = ["campaign"] + [f"cat{i}" for i in range(1, 10)]
 
+# `cat1`-`cat9` describe the specific serving context of an impression that has
+# already happened (verified impression-level, not campaign-level, in
+# attribution_dataset_verification.md Sec1) -- they do not exist for a
+# not-yet-served retrieval candidate (docs/ranking_problem_design.md Q5,
+# docs/ranking_integration_design.md). `time_since_last_click` is NOT excluded
+# here: it is derived purely from the user's own past click history, knowable
+# before any serving decision is made, unlike cat1-9's impression-specific
+# context -- see docs/pre_serve_ctr_model.md for the full rationale.
+IMPRESSION_CONTEXT_ONLY_COLUMNS = [f"cat{i}" for i in range(1, 10)]
+
+# The feature subset usable to score a candidate BEFORE it has been served --
+# derived from FEATURE_COLUMNS/CATEGORICAL_FEATURE_COLUMNS rather than
+# hardcoded separately, so the two feature sets cannot silently drift apart.
+PRE_SERVE_FEATURE_COLUMNS = [c for c in FEATURE_COLUMNS if c not in IMPRESSION_CONTEXT_ONLY_COLUMNS]
+PRE_SERVE_CATEGORICAL_FEATURE_COLUMNS = [
+    c for c in CATEGORICAL_FEATURE_COLUMNS if c not in IMPRESSION_CONTEXT_ONLY_COLUMNS
+]
+
 # Fields that must never appear in FEATURE_COLUMNS -- checked by a unit test
 # (tests/test_ctr_features.py::test_no_post_outcome_columns_in_feature_columns)
 # so this list stays authoritative even if features are added later.

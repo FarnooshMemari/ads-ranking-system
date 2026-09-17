@@ -92,6 +92,40 @@ attribution:
         min_child_samples: 100
         seed: 42
         verbose: -1
+    # Feature-ablated variant of ctr_model, excluding cat1-9 (see
+    # src.features.attribution_features.PRE_SERVE_FEATURE_COLUMNS): the only
+    # variant valid for scoring a retrieval candidate BEFORE it is served,
+    # since cat1-9 don't exist until an impression actually happens. Same
+    # hyperparameters as ctr_model -- only the feature/categorical list
+    # differs -- so any performance delta is attributable to the removed
+    # features, not to a different model configuration. See
+    # docs/pre_serve_ctr_model.md.
+    ctr_model_pre_serve:
+      type: lightgbm
+      missing_value_strategy: native_lightgbm
+      categorical_features:
+        - campaign
+      training:
+        num_boost_round: 500
+        early_stopping_rounds: 30
+      model_output_path: outputs/models/pre_serve_ctr_model.txt
+      params:
+        objective: binary
+        metric: [auc, binary_logloss]
+        learning_rate: 0.05
+        num_leaves: 31
+        min_child_samples: 100
+        seed: 42
+        verbose: -1
+  # Restricted retrieval-candidate ranking check (docs/ranking_integration_design.md
+  # Part B): only campaigns independently confirmed as actually shown to the
+  # same user in the test period may be used as verified candidates -- never
+  # unobserved retrieved campaigns. `min_users_for_ranking_check` is a
+  # documented, pragmatic minimum sample size (not a rigorously derived power
+  # calculation) below which a ranking-agreement metric is reported as not
+  # statistically defensible rather than computed and presented as reliable.
+  ranking_integration:
+    min_users_for_ranking_check: 30
 
 # ---------------------------------------------------------------------------
 # Feature engineering
