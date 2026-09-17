@@ -1,4 +1,4 @@
-.PHONY: setup install test lint format clean download-data
+.PHONY: setup install test lint format clean download-data download-attribution-data popularity-baseline
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -14,6 +14,12 @@ install:
 
 download-data:
 	python3 scripts/download_criteo.py
+
+download-attribution-data:
+	python3 scripts/download_attribution.py
+
+popularity-baseline:
+	python3 scripts/run_popularity_baseline.py
 
 test:
 	pytest -v --cov=src tests/

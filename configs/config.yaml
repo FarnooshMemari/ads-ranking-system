@@ -37,6 +37,31 @@ criteo:
   num_categorical_features: 26
 
 # ---------------------------------------------------------------------------
+# Criteo Attribution Modeling for Bidding Dataset (recommendation-system
+# component; see docs/attribution_modeling_design.md and
+# docs/attribution_dataset_verification.md). Kept fully separate from the
+# `criteo` (DAC) section above — used only for this project's own
+# recommendation work, not the Microsoft Recommenders contribution.
+#
+# `split` defines the day-boundary (timestamp // 86400) chronological split:
+# day < train_end_day -> train; train_end_day <= day < val_end_day ->
+# validation; day >= val_end_day -> test. `cohort.warm_min_distinct_clicked_
+# campaigns` is the verified threshold below which a user has no learnable
+# relative-preference signal (see design doc §3B) — 5.39% of users meet it.
+# ---------------------------------------------------------------------------
+attribution:
+  raw_dir: data/raw/attribution
+  archive_filename: criteo_attribution_dataset.tsv.gz
+  source_url: https://huggingface.co/datasets/criteo/criteo-attribution-dataset/resolve/main/criteo_attribution_dataset.tsv.gz
+  split:
+    train_end_day: 20
+    val_end_day: 25
+  cohort:
+    warm_min_distinct_clicked_campaigns: 2
+  retrieval:
+    top_k: 10
+
+# ---------------------------------------------------------------------------
 # Feature engineering
 # ---------------------------------------------------------------------------
 features:

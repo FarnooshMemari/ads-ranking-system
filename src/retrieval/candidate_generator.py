@@ -6,11 +6,17 @@ stage (``src/models/ranking_model.py``):
 
     Large ad pool -> Candidate generation/retrieval -> Ranking model
 
-Implemented in Phase 4: recommendation / candidate generation.
+``PopularityCandidateGenerator`` is implemented (the cold-start baseline —
+see docs/attribution_modeling_design.md §3B/§4 and docs/popularity_baseline.md).
+The embedding- and collaborative-filtering-based generators remain Phase 4
+placeholders, deliberately deferred pending the warm-cohort evaluation this
+baseline exists to be compared against.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, List
+from typing import Any, List, Optional
+
+import pandas as pd
 
 
 class BaseCandidateGenerator(ABC):
@@ -67,6 +73,67 @@ class EmbeddingCandidateGenerator(BaseCandidateGenerator):
 
     def generate(self, user: Any, context: Any, k: int) -> List[Any]:
         raise NotImplementedError("Implemented in Phase 4: candidate generation.")
+
+
+class PopularityCandidateGenerator(BaseCandidateGenerator):
+    """Retrieves the same training-period-popularity-ranked items for every
+    user, regardless of their individual history.
+
+    This is **not personalized** — it is the retrieval strategy for the
+    cold-start cohort (see docs/attribution_modeling_design.md §3B/§4), where
+    94.61% of users have no relative-preference signal for any personalized
+    method to learn from. A separate cohort-classification step
+    (``src/retrieval/cohort.py``) decides which users this strategy should be
+    applied to; this class has no cohort awareness of its own.
+    """
+
+    def __init__(self):
+        self.popularity_: Optional[pd.Series] = None
+
+    def fit(
+        self,
+        train_interactions: pd.DataFrame,
+        item_col: str = "campaign",
+        positive_col: str = "click",
+    ) -> "PopularityCandidateGenerator":
+        """Compute a training-period popularity ranking.
+
+        Args:
+            train_interactions: Training-period interaction rows only — no
+                time filtering is performed here (see
+                ``src.data.attribution.split_by_day``); passing anything but
+                a pre-filtered training split will leak future information
+                into the ranking.
+            item_col: Column identifying the recommendable item (e.g.
+                ``"campaign"``).
+            positive_col: Binary column whose sum defines popularity (e.g.
+                ``"click"``).
+
+        Returns:
+            self, with ``popularity_`` set to a ``pandas.Series`` indexed by
+            item id, sorted descending by count. Ties are broken
+            deterministically by ascending item id (stable sort on an
+            index-sorted Series), so the ranking is reproducible run to run.
+        """
+        counts = train_interactions.groupby(item_col)[positive_col].sum()
+        self.popularity_ = counts.sort_index().sort_values(ascending=False, kind="mergesort")
+        return self
+
+    def generate(self, user: Any, context: Any, k: int) -> List[Any]:
+        """Return the top-k most popular items — identical for every user.
+
+        Args:
+            user: Ignored — this generator is not personalized.
+            context: Ignored.
+            k: Number of items to retrieve.
+
+        Returns:
+            Up to ``k`` item ids, most popular first. Fewer than ``k`` if the
+            catalog itself has fewer than ``k`` items (no padding or error).
+        """
+        if self.popularity_ is None:
+            raise RuntimeError("PopularityCandidateGenerator must be fit() before generate().")
+        return self.popularity_.index[:k].tolist()
 
 
 class CollaborativeFilteringCandidateGenerator(BaseCandidateGenerator):
