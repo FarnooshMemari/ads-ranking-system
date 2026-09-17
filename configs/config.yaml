@@ -1,0 +1,79 @@
+# Central configuration for the ads ranking system.
+# Values here are defaults/placeholders — actual dataset paths and
+# hyperparameters will be populated starting in Phase 1.
+
+project:
+  name: ads-ranking-system
+  random_seed: 42
+
+# ---------------------------------------------------------------------------
+# Data paths
+# ---------------------------------------------------------------------------
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  train_file: data/processed/train.parquet
+  val_file: data/processed/val.parquet
+  test_file: data/processed/test.parquet
+  target_column: clicked
+
+# ---------------------------------------------------------------------------
+# Criteo dataset (Phase 1 raw data source)
+#
+# The "sample" variant (~100K rows) is a subsampled, chronologically-ordered
+# benchmark for CTR prediction. It has NO user_id, ad_id, session_id, or
+# conversion label — see docs/criteo_dataset.md for the verified schema,
+# licensing terms, and why this project does not use it for candidate
+# generation or CVR. `raw_dir` is relative to the project root.
+# ---------------------------------------------------------------------------
+criteo:
+  variant: sample   # only "sample" is supported by this project (see docs/criteo_dataset.md)
+  raw_dir: data/raw/criteo
+  archive_filename: dac_sample.tar.gz
+  extracted_filename: dac_sample.txt
+  source_url: https://huggingface.co/datasets/Recommenders/Criteo/resolve/main/dac_sample.tar.gz
+  label_column: label
+  num_numerical_features: 13
+  num_categorical_features: 26
+
+# ---------------------------------------------------------------------------
+# Feature engineering
+# ---------------------------------------------------------------------------
+features:
+  categorical_columns: []
+  numerical_columns: []
+  id_columns:
+    - user_id
+    - ad_id
+
+# ---------------------------------------------------------------------------
+# Model parameters
+# ---------------------------------------------------------------------------
+model:
+  ctr:
+    type: lightgbm          # baseline: logistic_regression | lightgbm
+    params:
+      objective: binary
+      metric: auc
+      learning_rate: 0.05
+      num_leaves: 31
+      n_estimators: 500
+      early_stopping_rounds: 50
+  ranking:
+    type: lambdamart         # placeholder for Phase 3
+    params: {}
+
+# ---------------------------------------------------------------------------
+# Experiment settings
+# ---------------------------------------------------------------------------
+experiment:
+  name: baseline
+  tracking_dir: outputs/experiments
+  metrics:
+    - auc
+    - logloss
+    - ndcg@10
+  train_val_test_split:
+    strategy: time_based      # time_based | random
+    val_size: 0.15
+    test_size: 0.15

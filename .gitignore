@@ -1,0 +1,58 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Data (raw/processed data is not committed; keep directory structure via .gitkeep)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Experiment tracking / artifacts
+mlruns/
+mlflow.db
+*.log
+outputs/
+checkpoints/
+*.ckpt
+*.pkl
+*.joblib
+
+# Experiment run outputs (structure kept via .gitkeep, results are not committed)
+experiments/baseline/*
+experiments/ctr_model/*
+experiments/ranking_model/*
+!experiments/baseline/.gitkeep
+!experiments/ctr_model/.gitkeep
+!experiments/ranking_model/.gitkeep
+
+# Environment / secrets
+.env
+*.local.yaml
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Coverage
+.coverage
+htmlcov/
