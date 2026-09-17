@@ -60,6 +60,38 @@ attribution:
     warm_min_distinct_clicked_campaigns: 2
   retrieval:
     top_k: 10
+  ranking:
+    # First ranking-stage experiment (docs/ranking_problem_design.md,
+    # docs/ctr_model.md): P(click | impression), trained only on real,
+    # already-served impressions. `missing_value_strategy` documents how
+    # `user_click_rate_before` (undefined for a user's first-ever impression)
+    # is handled: left as NaN and passed to LightGBM's native missing-value
+    # split handling, rather than filled with a magic-number sentinel.
+    ctr_model:
+      type: lightgbm
+      missing_value_strategy: native_lightgbm
+      categorical_features:
+        - campaign
+        - cat1
+        - cat2
+        - cat3
+        - cat4
+        - cat5
+        - cat6
+        - cat7
+        - cat8
+        - cat9
+      training:
+        num_boost_round: 500
+        early_stopping_rounds: 30
+      params:
+        objective: binary
+        metric: [auc, binary_logloss]
+        learning_rate: 0.05
+        num_leaves: 31
+        min_child_samples: 100
+        seed: 42
+        verbose: -1
 
 # ---------------------------------------------------------------------------
 # Feature engineering

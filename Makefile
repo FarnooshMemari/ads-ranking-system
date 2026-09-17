@@ -1,4 +1,4 @@
-.PHONY: setup install test lint format clean download-data download-attribution-data popularity-baseline cf-experiment
+.PHONY: setup install test lint format clean download-data download-attribution-data popularity-baseline cf-experiment ctr-experiment
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -23,6 +23,9 @@ popularity-baseline:
 
 cf-experiment:
 	python3 scripts/run_collaborative_filtering_experiment.py
+
+ctr-experiment:
+	python3 scripts/run_ctr_experiment.py
 
 test:
 	pytest -v --cov=src tests/
