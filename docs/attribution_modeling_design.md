@@ -15,12 +15,17 @@ observed rates are not claimed to be true production base rates, the same cautio
 documented for DAC (and confirmed materially true here too: observed CTR is 36%, far above
 real-world rates — see the verification report).
 
-**Update**: every item originally marked ⚠️ UNVERIFIED below has since been checked directly
-against the downloaded dataset. Full evidence, computed statistics, and everything that remains
-genuinely unresolved are in
-[`attribution_dataset_verification.md`](attribution_dataset_verification.md) — this document is
-updated below only where that verification resolves or corrects a specific prior statement; it is
-not a redesign.
+**Update (schema verification)**: every item originally marked ⚠️ UNVERIFIED below has since been
+checked directly against the downloaded dataset. Full evidence, computed statistics, and everything
+that remains genuinely unresolved are in
+[`attribution_dataset_verification.md`](attribution_dataset_verification.md).
+
+**Update (architecture reassessment)**: a second, deeper verification pass — computing full
+per-user and per-campaign *distributions*, not just averages — found that the pure
+collaborative-filtering retrieval design originally proposed in §4 is **not statistically
+defensible** as the primary method. See §3B below for the evidence and §4 for the revised
+approach. This is a real correction to the architecture, not a cosmetic update — flagged
+prominently here so it isn't missed.
 
 ---
 
@@ -110,46 +115,130 @@ revisited once the actual click/conversion counts are inspected at implementatio
 
 ---
 
+## 3B. Sparsity & Collaborative-Filtering Feasibility Reassessment
+
+This section is a **verified-fact-driven correction** to §4 as originally written. All numbers
+below were computed directly from the full 16,468,027-row dataset (`uid`, `campaign`, `click`,
+`conversion` columns), not estimated or assumed. They are clearly separated from the modeling
+assumptions and proposed methodology that follow.
+
+### Verified facts: user-history sparsity
+
+| Statistic | Value |
+|---|---|
+| Median impressions/user | **1** |
+| Mean impressions/user | 2.68 |
+| Users with exactly 1 impression ever | 51.69% |
+| Users with 1–2 impressions | 71.07% |
+| Users with 6+ impressions | 10.19% |
+| Users with 0 clicks ever | 54.19% |
+| Users with exactly 1 click | 28.46% |
+| Users with **distinct campaigns seen == 1** | **79.20%** |
+| Users with **distinct campaigns clicked == 0** | 54.19% |
+| Users with **distinct campaigns clicked == 1** | 40.41% |
+| **Users with distinct campaigns clicked ≥ 2** | **5.39%** (331,297 of 6,142,256) |
+| Users with distinct campaigns clicked ≥ 3 | 0.81% |
+
+**Why "distinct campaigns clicked ≥ 2" is the load-bearing number**: collaborative filtering (and
+any personalization method) works by learning a *relative* preference — this campaign over that
+one — for a given user. A user who has clicked on only one campaign (or none) provides no relative
+signal; there is nothing to triangulate a preference against. **94.61% of all users in this
+dataset have no basis for a learnable personalized preference at all.** This is not a modeling
+limitation — it is a structural property of the data.
+
+### Verified facts: campaign-side density (for contrast)
+
+| Statistic | Value |
+|---|---|
+| Median impressions/campaign | 10,357 |
+| 10th-percentile campaign, impressions | 2,544 |
+| Min impressions for any campaign | 20 |
+| Top 20 campaigns' share of all clicks | 29.98% |
+| Top 100 campaigns' share of all clicks | 63.16% |
+| Gini coefficient, campaign click counts | 0.66 |
+
+Campaigns are data-dense (every campaign has thousands of impressions at minimum) and moderately,
+not extremely, concentrated (a long tail beyond the top 100 still gets over a third of clicks).
+**The asymmetry is stark and important**: campaigns have abundant aggregate signal; individual
+users almost never do.
+
+### Verified fact: even the "warm" cohort barely diverges from population-level popularity
+
+For the 331,297 users (5.39%) who *do* have ≥2 distinct clicked campaigns — the only population for
+whom personalization is even theoretically definable — **26.99% of their clicks are on the globally
+top-20-by-clicks campaigns**, versus **29.98% for the overall click population**. These two numbers
+are close enough that there is no strong evidence the "warm" cohort's taste diverges meaningfully
+from simply following the crowd. This does not prove personalization is worthless for this group,
+but it means it cannot be assumed to help — it has to be measured, and the prior expectation should
+be modest.
+
+### What this does and does not prove (fact vs. assumption)
+
+- **Proven**: the data cannot support a general-purpose, per-user collaborative-filtering retrieval
+  system as the *primary* mechanism — the eligible population (5.39%) is too small, and even within
+  it, the personalization signal (if any) is weak relative to popularity.
+- **Not proven, and not claimed**: that collaborative filtering produces *zero* value for the warm
+  cohort. That is an empirical question deferred to implementation (§8's evaluation design is
+  built specifically to answer it rigorously, without conflating it with the cold majority).
+- **A modeling assumption going forward** (stated as such, not as fact): campaign popularity is
+  treated as the safe, always-available default signal, because it is dense and stable; any
+  personalization layered on top is treated as an unproven enhancement to be validated per cohort,
+  not assumed.
+
+---
+
 ## 4. Candidate Generation (Retrieval Stage)
 
-**Approach**: implicit-feedback matrix factorization over the `uid × campaign` click matrix,
-producing a user embedding and a campaign embedding, scored by dot product — the same family of
-technique as ALS/BPR in Microsoft Recommenders, applied to this project's own data.
+**Revised approach (supersedes the original pure-CF design, per §3B's evidence): a segmented,
+cold-start-aware retrieval policy, not a single collaborative-filtering model.** Users are split
+into two populations using only their pre-prediction-time history, and each gets a different,
+honestly-scoped retrieval strategy:
+
+| Population | Definition | Share of users (verified) | Retrieval strategy |
+|---|---|---|---|
+| **Cold** | 0 or 1 distinct clicked campaigns in history | 94.61% | Campaign popularity (training-period click counts), optionally adjusted by the single campaign the user *has* seen (e.g. mild frequency boost to campaigns whose available `cat_i` context loosely overlaps with what little the user has been shown), as a modeling enhancement — not collaborative filtering, since there is no relative-preference signal to learn. |
+| **Warm** | ≥2 distinct clicked campaigns in history | 5.39% | Implicit-feedback collaborative filtering (matrix factorization over this cohort's `uid × campaign` click matrix), evaluated *against* the popularity baseline for this same cohort — not assumed to win (§3B's popularity-overlap finding suggests it may not, by much). |
+
+This is **option E** in the comparison below (a segmented policy, not a single blended formula) —
+chosen because it is auditable (each population's strategy and its evaluation are reported
+separately, per §8) and because it matches how production cold-start systems are actually built,
+rather than assuming one model form fits a population that is 94.6% sparse and 5.4% workable.
+
+### Comparison of candidate-generation formulations
+
+| # | Formulation | Verdict given verified density | Why |
+|---|---|---|---|
+| A | **Pure implicit collaborative filtering** (original design) | **Rejected as primary** | 94.61% of users have no relative-preference signal (§3B); the eligible 5.39% show clicks barely more concentrated toward non-popular campaigns than the general population. A single per-user CF model applied to everyone would be fitting noise for the vast majority. |
+| B | **Popularity / personalized popularity** | **Adopted for the cold population (94.6%)** | Campaign-side data is dense and stable (median 10,357 impressions/campaign); this is the only signal that reliably exists for almost every user. "Personalized" here can mean at most a light adjustment from the 0–1 campaigns a cold user has actually seen — not a learned embedding. |
+| C | **Content/context-based retrieval** (using `cat1`–`cat9`) | **Rejected as a standalone method** | §1 already established no `cat_i` is a reliable static campaign attribute, so there is no stable per-campaign content profile to retrieve against. A weak, explicitly-labeled contextual nudge is usable as an enhancement (folded into B above), not as its own retrieval mechanism. |
+| D | **Hybrid (blended score across signals)** | **Partially adopted, in segmented form** | A single blended formula (e.g. `α·popularity + β·CF_score`) was considered but rejected in favor of E below — a blend risks quietly averaging away the fact that CF is only meaningful for 5.4% of users; a single α/β would be tuned mostly by the cold majority regardless of what value it has for the warm minority. |
+| E | **Segmented, cold-start-aware retrieval policy** (adopted) | **Adopted as the primary architecture** | Explicitly branches strategy by measured user warmth instead of assuming one model fits all. Auditable: each population's approach and evaluation are reported separately (§8), so a claim like "personalization helps" can be checked, not assumed, for the only cohort where it could possibly be true. |
 
 **Why not a full ANN/vector-index retrieval setup**: with only 675 campaigns (verified count),
-brute-force scoring (a user embedding against all 675 campaign embeddings) is computationally
-trivial — an ANN index would add infrastructure the catalog size doesn't justify. This is a
-deliberate right-sizing decision, not a shortcut: it keeps the project honest about operating at
-prototype scale (§11) rather than pretending to solve a large-catalog retrieval problem it doesn't
-have.
+brute-force scoring is computationally trivial for either population's strategy — an ANN index
+would add infrastructure the catalog size doesn't justify. Unchanged from the original design.
 
-**⚠️ Feasibility flag from verification (new finding, not a redesign)**: this section's premise —
-that a per-user collaborative-filtering embedding is learnable — is now in tension with the
-average-2.68-impressions-per-user finding in §3. Most users simply won't have enough individual
-history to support a robust personalized embedding; a large majority will behave as effectively
-cold-start regardless of technique. This does not invalidate the approach (campaigns themselves
-are data-dense: ~24,397 impressions/campaign on average, and 45.8% of users do have at least one
-click), but it means per-user personalization strength should be expected to be modest, and
-alternatives (e.g. behavioral segment-level embeddings instead of pure per-user ones, or leaning
-more on campaign-side popularity/context) should be evaluated empirically rather than assumed away.
-This is flagged for the next design review, not resolved here.
-
-**What the retrieval model optimizes**: an implicit-feedback objective over the `(uid, campaign)`
-click matrix — reconstructing observed positive (clicked) pairs while pushing down scores for
-non-interacted pairs, using the negative distinction from §3 (shown-not-clicked as a stronger
-negative signal than never-shown). Concretely this is either a weighted regularized factorization
-(ALS-style, with click count/recency informing confidence) or a pairwise ranking loss (BPR-style,
-preferring a user's clicked campaigns over sampled non-interacted ones). Both are reasonable;
-choosing between them is an implementation-time decision, not a design-blocking one.
+**What the retrieval model(s) optimize**:
+- *Cold population*: no model is being fit to individual users — this is a frozen,
+  training-period-computed popularity ranking (optionally context-adjusted). There is nothing to
+  "learn" per user because, per §3B, there is no relative-preference signal available for 94.6% of
+  users.
+- *Warm population*: an implicit-feedback objective over the `(uid, campaign)` click matrix,
+  restricted to the 331,297-user warm cohort — reconstructing observed positive (clicked) pairs
+  while pushing down non-interacted pairs (ALS-style weighted factorization or BPR-style pairwise
+  loss; the choice between them is an implementation-time detail, not design-blocking). Crucially,
+  this model's value is **not assumed** — §8 defines exactly how its lift over the cohort's own
+  popularity baseline is measured before any claim is made about it working.
 
 **What information is available at recommendation time**:
-- The user's own click/impression history strictly before the prediction timestamp (to place them
-  in embedding space, or look up a learned embedding if they were in the training set).
-- The full candidate campaign set and their trained embeddings (from training-period data only).
-- **Not available as retrieval input**: `cat1`–`cat9`, because they are impression-level fields
-  that only exist once a campaign *has been* shown — confirmed in §1 that none is reliably
-  constant per campaign, so they cannot describe a campaign in general. Retrieval must therefore
-  rely on collaborative (interaction-history) signal, not content features.
+- The user's own click/impression history strictly before the prediction timestamp, used first to
+  classify them cold vs. warm, then (for warm users) to place them in the collaborative-filtering
+  embedding space.
+- The full candidate campaign set and training-period popularity/embeddings.
+- **Not available as retrieval input**: `cat1`–`cat9` as *campaign* descriptors, because §1
+  confirmed none is reliably constant per campaign — they remain impression-level-only signal, and
+  any use of them here (e.g. the cold-population context adjustment above) is a coarse, explicitly
+  tentative enhancement, not a claim of genuine content-based retrieval (see §5, option C).
 
 ---
 
@@ -291,6 +380,33 @@ and should not be collapsed into one leaderboard number.
   system. Results should be read as "does the technique work," not "this recall rate would hold at
   scale."
 
+**Critical addition, required by §3B/§4's segmented design — retrieval metrics must be reported per
+cohort, never as one blended number**: a single population-wide Recall@K would be dominated by the
+94.6% cold majority, and *any* method — including pure popularity — would score identically on that
+majority almost by construction, making it impossible to tell whether personalization contributed
+anything. To avoid rewarding a model merely for recommending globally popular campaigns:
+
+1. **Classify users into cold/warm using only pre-test-period history** (the same 0/1 vs. ≥2
+   distinct-clicked-campaigns split from §3B, computed strictly from train-period data — never
+   using test-period interactions to decide which cohort a user belongs to, which would itself be
+   leakage).
+2. **Report Recall@K/Hit Rate@K separately for the cold cohort and the warm cohort** — never
+   combined into one number.
+3. **For the warm cohort specifically, report lift**: `Recall@K(candidate method) −
+   Recall@K(popularity baseline computed on the same warm cohort)`. A positive, non-trivial lift is
+   the only legitimate evidence that personalization is adding value; a lift near zero — which
+   §3B's popularity-overlap finding (27.0% vs. 29.98%) suggests is plausible — is itself a valid,
+   reportable result, not a failure to hide.
+4. **The cold cohort's evaluation exists to confirm the fallback works, not to claim
+   personalization** — recall here should simply be compared against a naive "always-empty" or
+   "random-K" floor, not against the warm cohort's numbers, since the two cohorts are answering
+   different questions.
+
+Ground truth for all of the above is each user's **test-period** (days 25–30) clicked campaign(s),
+using the day-based split already established in §6 — this is standard temporal evaluation: fit
+everything on train, classify cohort membership on train, predict candidates using only train
+(and, for the ranking stage, validation-tuned) information, and check against test-period truth.
+
 **Ranking** (does the model score correctly within the candidate set?):
 - **PR-AUC** — primary, for both CTR and CVR. Preferred over ROC-AUC specifically because both
   labels are imbalanced (CTR less severely, CVR extremely so), and PR-AUC is more diagnostic under
@@ -312,45 +428,60 @@ and should not be collapsed into one leaderboard number.
   currency (Criteo's own documentation states `cost`/`cpo` are "not the real price, only a
   transformed version of it").
 
-**What's primary overall**: Recall@K for retrieval, PR-AUC (CTR) for ranking. These are the two
-numbers that should gate whether a stage "works" at all; everything else is diagnostic or
-descriptive context around them.
+**What's primary overall**: cold-cohort Recall@K (does the fallback work at all) and warm-cohort
+*lift* over its own popularity baseline (does personalization add anything where it's even
+possible) for retrieval; PR-AUC (CTR) for ranking. These are the numbers that should gate whether a
+stage "works" at all; everything else is diagnostic or descriptive context around them.
 
 ---
 
 ## 9. Baselines
 
-A deliberate progression, each stage evaluated against the metrics in §8 before moving to the
-next — not implemented in this document, only sequenced:
+**Revised progression** (supersedes the original list, which treated collaborative filtering as
+the default second step for the whole population — no longer accurate given §3B):
 
-1. **Popularity baseline** (retrieval): recommend the globally most-clicked campaigns
-   (training-period aggregate), identical for every user. No personalization — establishes the
-   floor that any learned model must beat.
-2. **Collaborative filtering baseline** (retrieval): implicit-feedback matrix factorization on the
-   `uid × campaign` click matrix (§4). The first personalized baseline; should outperform (1) on
-   Recall@K/NDCG@K if there is real personalization signal to learn — not assumed, to be checked.
-3. **Learned retrieval** (retrieval): a richer embedding objective (e.g. BPR pairwise loss instead
-   of (2)'s pointwise factorization) — tests whether a more expressive retrieval objective helps
-   at this catalog's small scale; may not beat (2), and that result would itself be a legitimate,
-   reportable finding given the small catalog.
-4. **Ranking model** (ranking): a gradient-boosted CTR model (and a separate, explicitly-caveated
-   sparse CVR model), consistent with the LightGBM choice already established for the DAC/Phase-2
-   work, trained on the features in §7 and applied on top of whichever retrieval stage (2 or 3)
-   performs best — the stage that actually uses `cat1`–`cat9` and history features to
-   differentiate candidates beyond pure collaborative signal.
+1. **Popularity baseline** (retrieval, both cohorts): recommend the globally most-clicked campaigns
+   (training-period aggregate), identical for every user. This is now the **primary retrieval
+   method for the cold cohort (94.6% of users)**, not just a floor — per §3B/§4, no other signal
+   reliably exists for this population.
+2. **Context-adjusted popularity** (retrieval, cold cohort): a light enhancement over (1) using
+   whichever `cat_i` weak signal is available from the cold user's one known impression — evaluated
+   against (1) on the cold cohort specifically; adopted only if it measurably helps, per §8.
+3. **Collaborative filtering** (retrieval, **warm cohort only, 5.4% of users**): implicit-feedback
+   matrix factorization on the `uid × campaign` click matrix, restricted to and evaluated only
+   against the warm cohort's own popularity baseline (lift, per §8) — explicitly not assumed to
+   win, given §3B's popularity-overlap finding for this same cohort.
+4. **Learned retrieval** (retrieval, warm cohort only): a richer embedding objective (e.g. BPR
+   pairwise loss) — tests whether a more expressive objective helps within the already-small warm
+   cohort; may not beat (3), and that result would itself be a legitimate, reportable finding.
+5. **Ranking model** (ranking, applied after either cohort's retrieval stage): a gradient-boosted
+   CTR model (and a separate, explicitly-caveated sparse CVR model), consistent with the LightGBM
+   choice already established for the DAC/Phase-2 work, trained on the features in §7 and applied
+   on top of whichever retrieval stage the cohort used — the stage that actually uses `cat1`–`cat9`
+   and history features to differentiate candidates beyond popularity/collaborative signal alone.
 
 ---
 
 ## 10. Final Proposed Architecture
 
+**Revised to reflect the segmented retrieval design in §4** (supersedes the original single-path
+diagram, which routed every user through collaborative filtering):
+
 ```
 historical interactions
         |
         v
-user/campaign representation      (implicit-feedback matrix factorization, §4)
+cohort classification              (cold: 0-1 distinct clicked campaigns, 94.6% |
+                                     warm: >=2 distinct clicked campaigns, 5.4%  — §3B)
         |
-        v
-candidate retrieval                (top-K campaigns by embedding dot product, §4)
+        +---------------------------+
+        |                           |
+        v                           v
+cold-cohort retrieval          warm-cohort retrieval
+(popularity, optionally        (implicit-feedback matrix
+ context-adjusted — §4)         factorization — §4)
+        |                           |
+        +---------------------------+
         |
         v
 candidate ranking                  (feature-based scoring of retrieved candidates, §7)
@@ -359,12 +490,14 @@ candidate ranking                  (feature-based scoring of retrieved candidate
 CTR/CVR prediction                 (LightGBM, PR-AUC/LogLoss primary, §5 §8)
         |
         v
-advertising evaluation             (Recall@K, PR-AUC, observed CTR/CVR, cost-based utility, §8)
+advertising evaluation             (per-cohort Recall@K, warm-cohort lift, PR-AUC,
+                                     observed CTR/CVR, cost-based utility — §8)
 ```
 
-Maps onto the existing repository structure: `src/retrieval/` (stage 2–3), `src/models/` (stage
-4), `src/evaluation/` (stage 5–6) — all currently placeholders, unimplemented until this design is
-approved and built.
+Maps onto the existing repository structure: `src/retrieval/` (cohort classification + both
+retrieval branches), `src/models/` (ranking stage), `src/evaluation/` (per-cohort retrieval
+metrics, ranking metrics, business metrics) — all currently placeholders, unimplemented until this
+design is approved and built.
 
 ---
 
@@ -392,6 +525,11 @@ approved and built.
 - **No cross-dataset joint modeling.** DAC and the Attribution dataset remain two separate
   deliverables (OSS notebook vs. this portfolio component, per the prior feasibility checkpoint)
   — not merged into a single unified model despite sharing a data source company.
+- **No blanket "personalized recommendation" claim.** Per §3B/§4, personalization is only
+  theoretically supportable for 5.4% of users, and even there it is not assumed to outperform
+  popularity — it is measured, per §8. Any write-up of this project must describe the system as
+  **cold-start-aware retrieval with measured, cohort-scoped personalization**, not as a general
+  personalization engine. This is the single most important scope boundary added by this revision.
 
 ---
 
@@ -418,3 +556,13 @@ Two things remain genuinely unresolved and are **not** design-blocking, but are 
 implementation time: the exact cause of 2,910 internally-inconsistent `conversion_id`s found during
 integrity checking (§6 of the verification report), and the dataset's exact (undisclosed)
 sub-sampling methodology.
+
+### Second pass: architecture reassessment (post-density-verification)
+
+A follow-up verification computed full per-user and per-campaign *distributions* (not just
+averages) specifically to test whether the original §4 design (collaborative filtering as the
+primary retrieval mechanism) was statistically defensible. It was not: only 5.39% of users have
+≥2 distinct clicked campaigns, the minimum needed for any relative-preference signal to exist. This
+is documented in full in the new §3B, and the architecture in §4, §8, §9, and §10 has been revised
+accordingly to a segmented, cold-start-aware retrieval policy. This is a correction to the
+architecture based on evidence, not a change of opinion — see §3B for the complete numbers.
