@@ -6,16 +6,17 @@ stage (``src/models/ranking_model.py``):
 
     Large ad pool -> Candidate generation/retrieval -> Ranking model
 
-``PopularityCandidateGenerator`` is implemented (the cold-start baseline —
-see docs/attribution_modeling_design.md §3B/§4 and docs/popularity_baseline.md).
-The embedding- and collaborative-filtering-based generators remain Phase 4
-placeholders, deliberately deferred pending the warm-cohort evaluation this
-baseline exists to be compared against.
+``PopularityCandidateGenerator`` (cold-start baseline) and
+``CollaborativeFilteringCandidateGenerator`` (warm-cohort item-based CF) are
+implemented — see docs/attribution_modeling_design.md §3B/§4,
+docs/popularity_baseline.md, and docs/collaborative_filtering.md.
+``EmbeddingCandidateGenerator`` remains a Phase 4 placeholder.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 
 
@@ -137,33 +138,167 @@ class PopularityCandidateGenerator(BaseCandidateGenerator):
 
 
 class CollaborativeFilteringCandidateGenerator(BaseCandidateGenerator):
-    """Retrieves candidates via collaborative filtering (user-ad interaction
-    co-occurrence, matrix factorization, etc.).
+    """Item-based collaborative filtering via co-occurrence similarity.
 
-    Implemented in Phase 4: recommendation / candidate generation.
+    This follows the SAR (Simple Algorithm for Recommendation) design pattern
+    from Microsoft Recommenders — verified directly from
+    ``recommenders/models/sar/sar_singlenode.py``, which depends only on
+    numpy/pandas/scipy (no Spark, no GPU) and uses this same similarity
+    vocabulary (cooccurrence, jaccard, ...). Self-implemented here (no new
+    dependency) rather than importing the `recommenders` package, consistent
+    with how the rest of this project's data/retrieval code is built.
+
+    Memory-based, not embedding-based: there is no per-user vector to learn
+    from sparse data — a user's score for a candidate campaign is the sum,
+    over campaigns they've already clicked, of (their affinity for that
+    campaign) x (its similarity to the candidate). This is deliberately
+    chosen over latent-factor methods (e.g. BPR) because it does not require
+    estimating a compressed per-user representation from very few
+    interactions — see docs/collaborative_filtering.md for the full
+    comparison and rationale.
+
+    Scoped to the warm cohort only — see
+    docs/attribution_modeling_design.md §3B/§4/§9. Not intended to be fit on
+    or evaluated against the cold cohort, which has no relative-preference
+    signal to learn from.
     """
 
-    def __init__(self, params: dict | None = None):
+    VALID_SIMILARITY_TYPES = ("jaccard", "cooccurrence")
+
+    def __init__(self, similarity_type: str = "jaccard"):
         """Initialize the collaborative filtering candidate generator.
 
         Args:
-            params: Retrieval hyperparameters (e.g. number of latent factors).
+            similarity_type: ``"jaccard"`` (co-occurring users normalized by
+                the union of each campaign's clickers — robust to popularity
+                skew) or ``"cooccurrence"`` (raw co-click counts — biased
+                toward popular campaigns, kept for comparison).
         """
-        self.params = params or {}
+        if similarity_type not in self.VALID_SIMILARITY_TYPES:
+            raise ValueError(
+                f"similarity_type must be one of {self.VALID_SIMILARITY_TYPES}, got {similarity_type!r}"
+            )
+        self.similarity_type = similarity_type
+        self.items_: Optional[List[Any]] = None
+        self.similarity_: Optional[pd.DataFrame] = None
+        self.user_affinity_: Optional[Dict[Any, Dict[Any, float]]] = None
 
-    def fit(self, interactions: Any) -> "CollaborativeFilteringCandidateGenerator":
-        """Fit the collaborative filtering model on historical interactions.
+    def fit(
+        self,
+        train_interactions: pd.DataFrame,
+        user_col: str = "uid",
+        item_col: str = "campaign",
+        positive_col: str = "click",
+    ) -> "CollaborativeFilteringCandidateGenerator":
+        """Fit item-item similarity and per-user affinity from positive interactions.
 
         Args:
-            interactions: Historical user-ad interaction data.
+            train_interactions: Training-period interaction rows only — no
+                time filtering is performed here (see
+                ``src.data.attribution.split_by_day``); passing anything but
+                a pre-filtered, warm-cohort-restricted training split will
+                leak information unavailable at recommendation time.
+            user_col: Column identifying the user.
+            item_col: Column identifying the recommendable item.
+            positive_col: Binary column whose presence defines a positive
+                interaction (e.g. ``"click"``).
 
         Returns:
-            The fitted generator instance (self).
+            self, with ``items_`` (the item catalog observed in training),
+            ``similarity_`` (an item x item DataFrame), and
+            ``user_affinity_`` (``{user: {item: click_count}}``) set.
         """
-        raise NotImplementedError("Implemented in Phase 4: candidate generation.")
+        positives = train_interactions[train_interactions[positive_col] == 1]
+        self.items_ = sorted(positives[item_col].unique().tolist())
 
-    def generate(self, user: Any, context: Any, k: int) -> List[Any]:
-        raise NotImplementedError("Implemented in Phase 4: candidate generation.")
+        affinity_counts = positives.groupby([user_col, item_col]).size()
+        affinity_df = affinity_counts.unstack(fill_value=0).reindex(columns=self.items_, fill_value=0)
+
+        binary = (affinity_df.to_numpy() > 0).astype(float)  # n_users x n_items
+        # Verified benign: some BLAS backends (observed with Apple Accelerate on
+        # arm64) emit spurious divide-by-zero/overflow/invalid-value
+        # RuntimeWarnings on this matmul shape even for clean 0/1 float64 input
+        # with no NaN/Inf. Cross-checked the result against a manual dot-product
+        # and against independently-computed per-item counts on both synthetic
+        # and real data -- always exact, no NaN/Inf in the output. Suppressed
+        # here rather than left to alarm anyone reading the output.
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            cooccurrence = binary.T @ binary  # n_items x n_items, symmetric
+
+        if self.similarity_type == "cooccurrence":
+            sim = cooccurrence
+        else:  # jaccard
+            item_click_user_counts = np.diag(cooccurrence).copy()
+            union = item_click_user_counts[:, None] + item_click_user_counts[None, :] - cooccurrence
+            with np.errstate(divide="ignore", invalid="ignore"):
+                sim = np.where(union > 0, cooccurrence / union, 0.0)
+        np.fill_diagonal(sim, 0.0)  # an item's similarity to itself is not used for scoring
+
+        self.similarity_ = pd.DataFrame(sim, index=self.items_, columns=self.items_)
+        self.user_affinity_ = {
+            uid: {item: int(count) for item, count in row.items() if count > 0}
+            for uid, row in affinity_df.iterrows()
+        }
+        return self
+
+    def generate(
+        self, user: Any, context: Any, k: int, exclude_seen: bool = False
+    ) -> List[Any]:
+        """Score all campaigns for ``user`` and return the top-k.
+
+        Args:
+            user: A user id present in ``user_affinity_`` (i.e. seen during
+                ``fit``). A user absent from training returns an empty list —
+                this generator has no signal to personalize for them (they
+                should be routed to ``PopularityCandidateGenerator`` instead).
+            context: Ignored — this generator uses only training-period
+                click history.
+            k: Number of items to retrieve.
+            exclude_seen: If True, remove campaigns the user already clicked
+                in training from the candidate list before ranking — the
+                more common real-world serving policy, but not the default,
+                since the popularity baseline it's compared against does not
+                exclude previously-seen campaigns either (see
+                docs/collaborative_filtering.md for the documented tradeoff).
+
+        Returns:
+            Up to ``k`` campaign ids with positive similarity-based
+            evidence, most-supported first, deterministic under ties
+            (ascending campaign id). Empty if the user is unknown or has no
+            campaigns with positive score.
+        """
+        if self.similarity_ is None or self.user_affinity_ is None:
+            raise RuntimeError("CollaborativeFilteringCandidateGenerator must be fit() before generate().")
+
+        user_items = self.user_affinity_.get(user)
+        if not user_items:
+            return []
+
+        weights = pd.Series(user_items, dtype=float).reindex(self.items_, fill_value=0.0)
+        scores = weights.dot(self.similarity_)  # Series indexed by candidate item
+
+        if exclude_seen:
+            scores = scores.drop(index=[item for item in user_items if item in scores.index])
+
+        scores = scores[scores > 0]
+        ranked = scores.sort_index().sort_values(ascending=False, kind="mergesort")
+        return ranked.index[:k].tolist()
+
+    def coverage_stats(self) -> Dict[str, int]:
+        """Basic fit-time coverage diagnostics.
+
+        Returns:
+            ``{"n_items_in_catalog": ..., "n_users_with_affinity": ...}`` —
+            the number of distinct campaigns with any training-period click
+            evidence, and the number of distinct users with a computed
+            affinity vector.
+        """
+        if self.items_ is None or self.user_affinity_ is None:
+            raise RuntimeError("CollaborativeFilteringCandidateGenerator must be fit() before coverage_stats().")
+        return {
+            "n_items_in_catalog": len(self.items_),
+            "n_users_with_affinity": len(self.user_affinity_),
+        }
 
 
 def merge_candidates(*candidate_lists: List[Any], k: int) -> List[Any]:

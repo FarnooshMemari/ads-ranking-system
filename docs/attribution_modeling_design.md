@@ -447,13 +447,23 @@ the default second step for the whole population — no longer accurate given §
 2. **Context-adjusted popularity** (retrieval, cold cohort): a light enhancement over (1) using
    whichever `cat_i` weak signal is available from the cold user's one known impression — evaluated
    against (1) on the cold cohort specifically; adopted only if it measurably helps, per §8.
-3. **Collaborative filtering** (retrieval, **warm cohort only, 5.4% of users**): implicit-feedback
-   matrix factorization on the `uid × campaign` click matrix, restricted to and evaluated only
-   against the warm cohort's own popularity baseline (lift, per §8) — explicitly not assumed to
-   win, given §3B's popularity-overlap finding for this same cohort.
-4. **Learned retrieval** (retrieval, warm cohort only): a richer embedding objective (e.g. BPR
-   pairwise loss) — tests whether a more expressive objective helps within the already-small warm
-   cohort; may not beat (3), and that result would itself be a legitimate, reportable finding.
+3. **Collaborative filtering** (retrieval, **warm cohort only, 5.4% of users**) — **✅ implemented
+   and evaluated; result: no measurable lift.** An item-based (SAR-design-pattern) similarity model,
+   fit only on the warm cohort's own training interactions, was evaluated against this cohort's own
+   popularity baseline on Recall@10/Hit Rate@10/NDCG@10. On the fair comparison (excluding campaigns
+   already seen in training — the only test that isolates genuine cross-campaign signal from
+   trivially re-recommending a user's own history), CF **underperformed popularity by 33–45%
+   relatively on all three metrics**. An unfiltered comparison shows a large apparent lift
+   (+130% recall), but this is attributable almost entirely to re-recommending previously-clicked
+   campaigns, not to real personalization. Full experiment, evidence, and both comparisons in
+   [`collaborative_filtering.md`](collaborative_filtering.md). This directly confirms the concern
+   already raised in §3B (warm users' clicks barely diverge from population popularity) rather than
+   just assuming it.
+4. **Learned retrieval** (retrieval, warm cohort only) — **not pursued after (3)'s result.** A
+   richer embedding objective (e.g. BPR pairwise loss) was the natural next step if (3) had shown
+   promise; given (3)'s negative result on the fair comparison, and per the task constraint not to
+   tune aggressively chasing a positive result, this is left as a documented possible future
+   direction rather than pursued now.
 5. **Ranking model** (ranking, applied after either cohort's retrieval stage): a gradient-boosted
    CTR model (and a separate, explicitly-caveated sparse CVR model), consistent with the LightGBM
    choice already established for the DAC/Phase-2 work, trained on the features in §7 and applied
@@ -566,3 +576,17 @@ primary retrieval mechanism) was statistically defensible. It was not: only 5.39
 is documented in full in the new §3B, and the architecture in §4, §8, §9, and §10 has been revised
 accordingly to a segmented, cold-start-aware retrieval policy. This is a correction to the
 architecture based on evidence, not a change of opinion — see §3B for the complete numbers.
+
+### Third pass: warm-cohort collaborative filtering, implemented and evaluated
+
+§3B's prediction was a hypothesis based on distributional evidence, not yet a tested outcome. It
+has since been tested directly: an item-based collaborative-filtering model, fit only on the warm
+cohort's own training data, was evaluated against the warm cohort's popularity baseline. Result:
+**no measurable lift** — on the fair comparison (excluding campaigns already seen in training), CF
+underperformed popularity by 33–45% relatively on Recall@10/Hit Rate@10/NDCG@10. An unfiltered
+comparison shows a large apparent lift, but it is driven almost entirely by re-recommending
+previously-clicked campaigns, not genuine personalization. Full evidence, both comparisons, and the
+model-choice rationale (SAR's design pattern, chosen and verified against Microsoft Recommenders'
+own implementation) are in [`collaborative_filtering.md`](collaborative_filtering.md); §9 above is
+updated accordingly. This closes the open question §3B raised with an actual, rigorously-tested
+answer rather than a prediction.
