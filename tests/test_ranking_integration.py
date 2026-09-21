@@ -9,14 +9,69 @@ import pytest
 
 from src.evaluation.ranking_integration import (
     build_exposure_maps,
+    classify_test_users,
     find_contrast_users,
     pairwise_accuracy,
     verified_candidates,
 )
+from src.retrieval.cohort import COLD, WARM
 
 
 def _test_row(uid, campaign, click):
     return {"uid": uid, "campaign": campaign, "click": click}
+
+
+class TestClassifyTestUsers:
+    """Regression coverage for the population-coverage bug: a user absent
+    from the train-period cohort map must default to COLD, never be
+    dropped from evaluation entirely."""
+
+    def test_user_with_train_history_keeps_their_assigned_cohort(self):
+        cohorts = pd.Series({1: WARM, 2: COLD})
+
+        result = classify_test_users(cohorts, test_uids=[1, 2])
+
+        assert result == {1: WARM, 2: COLD}
+
+    def test_user_absent_from_train_period_defaults_to_cold_not_dropped(self):
+        """The exact bug scenario: uid=99 appears in the test period but has
+        zero train-period history (absent from `cohorts` entirely) -- must
+        be classified COLD, not silently missing from the result."""
+        cohorts = pd.Series({1: WARM, 2: COLD})  # uid=99 is NOT in here
+
+        result = classify_test_users(cohorts, test_uids=[1, 2, 99])
+
+        assert 99 in result  # not dropped
+        assert result[99] == COLD
+
+    def test_every_test_uid_is_present_in_the_result(self):
+        """No user is ever silently excluded, regardless of train-period history."""
+        cohorts = pd.Series({1: WARM}, dtype=object)
+        test_uids = [1, 2, 3, 4, 5]  # only uid=1 has train history
+
+        result = classify_test_users(cohorts, test_uids)
+
+        assert set(result.keys()) == set(test_uids)
+        assert result[1] == WARM
+        for uid in [2, 3, 4, 5]:
+            assert result[uid] == COLD
+
+    def test_custom_default_cohort_respected(self):
+        cohorts = pd.Series({1: WARM}, dtype=object)
+
+        result = classify_test_users(cohorts, test_uids=[1, 2], default_cohort="custom_default")
+
+        assert result[2] == "custom_default"
+
+    def test_empty_cohorts_series_defaults_everyone(self):
+        """The extreme case: a train period with no classified users at all
+        (e.g. a tiny synthetic fixture) must still classify every test user,
+        never raise, never drop anyone."""
+        cohorts = pd.Series(dtype=object)
+
+        result = classify_test_users(cohorts, test_uids=[1, 2, 3])
+
+        assert result == {1: COLD, 2: COLD, 3: COLD}
 
 
 class TestBuildExposureMaps:

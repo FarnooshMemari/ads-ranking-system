@@ -29,46 +29,50 @@ experiments — not a new, drifted implementation.
 
 ## Part 2: Pipeline's own pairwise ranking-agreement accuracy — a new, different number, explained
 
-| Cohort | Verified contrast users | Pairwise accuracy (this pipeline) | Previously published ([`ranking_integration_results.md`](ranking_integration_results.md)) |
+| Cohort | Verified contrast users | Pairwise accuracy (this pipeline) | Published ([`ranking_integration_results.md`](ranking_integration_results.md)) |
 |---|---|---|---|
-| Cold | 1,091 | **0.5982** | 0.5535 (n=759) |
+| Cold | 1,091 | **0.5982** | 0.5345 (n=1,091) |
 | Warm | 3,479 | **0.5783** | 0.5298 (n=3,479) |
 
 Both numbers are new and were never expected to exactly reproduce the earlier ones — this was
 stated explicitly before running anything (`scripts/run_pipeline_demo.py`'s own header comment),
 because this pipeline scores every candidate using a **single as-of-day-25 snapshot** of a user's
-history, while the original Part B script scored each verified candidate using **that specific real
-row's own point-in-time features**, computed wherever in the day 25–30 test window that row
-actually fell. These are two different, both legitimate, questions: "what would we recommend right
-now, at a single coherent moment" versus "was the model's prediction good at the exact moment each
-real impression happened."
+history, while the Part B script scores each verified candidate using **that specific real row's own
+point-in-time features**, computed wherever in the day 25–30 test window that row actually fell.
+These are two different, both legitimate, questions: "what would we recommend right now, at a
+single coherent moment" versus "was the model's prediction good at the exact moment each real
+impression happened."
 
-### A second, unplanned factor for the cold cohort — a genuine discovery, not a discrepancy to wave away
+### A population-coverage bug this comparison surfaced — found and fixed
 
-The **warm** cohort's contrast-user count is identical (3,479 = 3,479) — for warm users, only the
-scoring-timing difference above explains its accuracy change. The **cold** cohort's count is not
-(1,091 vs. 759) — investigated directly rather than assumed, and traced to a real issue:
+Both cohorts' contrast-user counts now match exactly between this pipeline and the (corrected) Part
+B script: warm at 3,479 = 3,479, and cold at 1,091 = 1,091. That wasn't true when this comparison was
+first run — cold showed 1,091 (pipeline) vs. 759 (`run_ranking_integration_experiment.py`), while
+warm already matched. That asymmetry was investigated directly rather than assumed, and traced to a
+real bug rather than the expected scoring-timing difference alone:
 
-`run_ranking_integration_experiment.py` (the original Part B script) built its cold-cohort
-population as `test_uids & cold_uids`, where `cold_uids = set(cohorts[cohorts == COLD].index)` —
-this **silently excludes any user absent from the training-period cohort assignment entirely**
-(a user who first appears during the test period, with zero training history). This project's own
+`run_ranking_integration_experiment.py` had built its cold-cohort population as `test_uids &
+cold_uids`, where `cold_uids = set(cohorts[cohorts == COLD].index)` — this **silently excluded any
+user absent from the training-period cohort assignment entirely** (a user who first appears during
+the test period, with zero training history). This project's own
 `src.evaluation.retrieval_metrics.evaluate_retrieval_by_cohort` — used correctly by the *original*
 popularity baseline script — instead defaults such users to `COLD` via `cohorts.get(uid,
 default_cohort)`, the correct convention (a never-before-seen user is the coldest possible case,
 explicitly documented in `src/retrieval/cohort.py`). `RecommendationPipeline.cohort_for` uses this
-same correct default. Verified directly: **353,170 users** with a real test-period click have zero
+same correct default. Verified directly: **353,170 users** with a real test-period click had zero
 training-period history at all, and were silently dropped from `ranking_integration_results.md`'s
-cold-cohort evaluation entirely — not misclassified, simply never counted in either cohort.
+original cold-cohort evaluation entirely — not misclassified, simply never counted in either cohort.
 
-This does not affect the warm cohort (a never-seen user can default to `cold`, never to `warm`,
-under any correct convention), and it is **not a leakage issue** — no future information was used;
-it's a population-coverage gap, silently undercounting one cohort's evaluated population.
-**This is flagged here as a discovered issue for `ranking_integration_results.md`, not fixed in
-this change** — correcting that document is outside this step's scope
-(`docs/next_phase_design.md` scoped this work to building the pipeline, not auditing prior
-results), and doing so silently, as a side effect of an unrelated change, would be worse than
-surfacing it clearly for a deliberate follow-up.
+This never affected the warm cohort (a never-seen user can default to `cold`, never to `warm`, under
+any correct convention), and it was **not a leakage issue** — no future information was ever used;
+it was a population-coverage gap, silently undercounting one cohort's evaluated population. It has
+since been **fixed**: `src.evaluation.ranking_integration.classify_test_users` now applies the same
+default-to-cold convention used here, `run_ranking_integration_experiment.py` was updated to use it,
+regression coverage was added (`tests/test_ranking_integration.py::TestClassifyTestUsers`), and
+`ranking_integration_results.md` was rerun and corrected — full detail and corrected numbers there.
+With the population fixed, the remaining gap between this pipeline's cold accuracy (0.5982) and the
+corrected Part B figure (0.5345) is now cleanly attributable to the scoring-timing difference alone,
+the same single factor that already explained the warm cohort's gap.
 
 ## Part 3: Qualitative demonstration (deterministic selection)
 
@@ -126,8 +130,10 @@ independently logged test-period rows (`src.evaluation.ranking_integration.build
 
 The pipeline reproduces already-published retrieval numbers exactly, confirming it's a faithful
 assembly rather than a re-implementation. Its own ranking-agreement numbers (0.60 cold, 0.58 warm)
-are modestly higher than, but not directly comparable to, the previously published ones, for two
-identified and explained reasons — one expected (scoring-timing difference), one newly discovered
-(a population-coverage gap in the earlier Part B script, unrelated to leakage, flagged for a future
-correction rather than fixed here). The qualitative examples show the assembled system producing
-real, checkable output for individual users — including an honestly-reported miss, not just a hit.
+are modestly higher than, but not directly comparable to, the (corrected) published ones, for one
+remaining, fully explained reason: the scoring-timing difference (single as-of-day-25 snapshot vs.
+per-row point-in-time features). Comparing the two independently-built code paths also surfaced a
+real population-coverage bug in the earlier Part B script — unrelated to leakage — which has since
+been found, fixed, tested, and corrected in `ranking_integration_results.md`. The qualitative
+examples show the assembled system producing real, checkable output for individual users —
+including an honestly-reported miss, not just a hit.

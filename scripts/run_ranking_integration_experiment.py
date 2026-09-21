@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.data.attribution import load, split_by_day  # noqa: E402
 from src.evaluation.ranking_integration import (  # noqa: E402
     build_exposure_maps,
+    classify_test_users,
     find_contrast_users,
     pairwise_accuracy,
     verified_candidates,
@@ -141,7 +142,6 @@ def main() -> None:
         train_df, warm_min_distinct_campaigns=attr_cfg["cohort"]["warm_min_distinct_clicked_campaigns"]
     )
     warm_uids = set(cohorts[cohorts == WARM].index)
-    cold_uids = set(cohorts[cohorts == COLD].index)
 
     # --- Retrieval: reused exactly as built, unchanged (popularity on the
     # full training set; CF on the warm cohort's own training interactions,
@@ -160,9 +160,21 @@ def main() -> None:
     # Evaluation universe: users present in the test period at all (any real
     # impression, not just clickers -- broader than retrieval's own recall
     # evaluation, since exposure coverage is the question here, not clicks).
+    #
+    # FIXED (population-coverage bug, not leakage -- see
+    # src.evaluation.ranking_integration.classify_test_users and
+    # docs/ranking_integration_results.md): a user absent from `cohorts`
+    # entirely (zero training-period history) must default to COLD, the
+    # same convention already used correctly elsewhere in this project.
+    # The previous version of this script built cold_test_uids as
+    # `test_uids & set(cohorts[cohorts == COLD].index)`, which silently
+    # excluded any such user from both cohorts -- neither cold nor warm,
+    # just dropped. Verified: 353,170 users with real test-period activity
+    # had zero training-period history and were missing as a result.
     test_uids = set(test_df["uid"].unique())
-    cold_test_uids = sorted(test_uids & cold_uids)
-    warm_test_uids = sorted(test_uids & warm_uids)
+    test_user_cohorts = classify_test_users(cohorts, test_uids, default_cohort=COLD)
+    cold_test_uids = sorted(uid for uid, c in test_user_cohorts.items() if c == COLD)
+    warm_test_uids = sorted(uid for uid, c in test_user_cohorts.items() if c == WARM)
 
     print("\nBuilding pre-serve features for test-period rows (for scoring verified candidates)...")
     features = build_ctr_features(df, train_df)

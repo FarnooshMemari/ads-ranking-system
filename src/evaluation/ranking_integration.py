@@ -12,9 +12,47 @@ synthetic data and no LightGBM dependency).
 
 from collections import defaultdict
 from itertools import product
-from typing import Any, Callable, Dict, List, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Set, Tuple
 
 import pandas as pd
+
+from src.retrieval.cohort import COLD
+
+
+def classify_test_users(
+    cohorts: pd.Series, test_uids: Iterable[Any], default_cohort: str = COLD
+) -> Dict[Any, str]:
+    """Classify each test-period user by cohort, defaulting absent users correctly.
+
+    **Fixes a population-coverage bug** (not a leakage issue) found in the
+    original version of this evaluation: building the cold population as
+    ``test_uids & set(cohorts[cohorts == COLD].index)`` silently excludes
+    any user entirely absent from ``cohorts`` — i.e. a user with zero
+    training-period history who first appears during the test period. Such
+    a user is neither cold nor warm under that construction; they are
+    simply dropped from evaluation. Verified directly: 353,170 users with
+    real test-period activity had zero training-period history and were
+    missing from ``docs/ranking_integration_results.md``'s original
+    cold-cohort numbers as a result.
+
+    This function uses the same default-to-cold convention already used
+    correctly elsewhere in this project —
+    ``src.evaluation.retrieval_metrics.evaluate_retrieval_by_cohort``'s
+    ``default_cohort`` parameter, and
+    ``src.pipeline.RecommendationPipeline.cohort_for`` — so a user absent
+    from training is the coldest possible case, not an omitted one.
+
+    Args:
+        cohorts: Train-period cohort assignment (``src.retrieval.cohort.classify_users``
+            output) — a Series indexed by ``uid``.
+        test_uids: Users present in the test period (any real row).
+        default_cohort: Cohort assigned to a user absent from ``cohorts``.
+
+    Returns:
+        ``{uid: cohort_label}`` for every user in ``test_uids`` — none are
+        dropped.
+    """
+    return {uid: cohorts.get(uid, default_cohort) for uid in test_uids}
 
 
 def build_exposure_maps(test_df: pd.DataFrame) -> Tuple[Dict[Any, Set[Any]], Dict[Tuple[Any, Any], int]]:
